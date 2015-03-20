@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import logging
+import mimetypes
 import subprocess
 from imghdr import what as determinetype
 from django.core.files.base import ContentFile
@@ -37,12 +38,19 @@ logger = logging.getLogger('easy_thumbnails.optimize')
 def optimize_thumbnail(thumbnail):
     '''Optimize thumbnail images by removing unnecessary data'''
     try:
-        optimize_command = settings.THUMBNAIL_OPTIMIZE_COMMAND[
-            determinetype(thumbnail.path)]
+        file_type = determinetype(thumbnail.path)
+    except NotImplementedError:
+        # System is using an alternative storage backend
+        file_type_guess, encoding = mimetypes.guess_type(thumbnail.name)
+        if file_type_guess:
+            file_type = file_type_guess.split('/')[1]
+    except (TypeError, KeyError):
+        return
+    finally:
+        optimize_command = settings.THUMBNAIL_OPTIMIZE_COMMAND[file_type]
         if not optimize_command:
             return
-    except (TypeError, KeyError, NotImplementedError):
-        return
+
     storage = thumbnail.storage
     try:
         with NamedTemporaryFile() as temp_file:
@@ -59,7 +67,12 @@ def optimize_thumbnail(thumbnail):
                 logger.info('{0} returned nothing'.format(optimize_command))
             with open(temp_file.name, 'rb') as f:
                 thumbnail.file = ContentFile(f.read())
-                storage.delete(thumbnail.path)
-                storage.save(thumbnail.path, thumbnail)
+                try:
+                    storage.delete(thumbnail.path)
+                    storage.save(thumbnail.path, thumbnail)
+                except NotImplementedError:
+                    # Alternative object-based storage backends use name
+                    storage.delete(thumbnail.name)
+                    storage.save(thumbnail.name, thumbnail)
     except Exception as e:
         logger.error(e)
